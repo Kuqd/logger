@@ -7,8 +7,6 @@ import (
 	"math/rand"
 	"net/url"
 	"os"
-	"os/signal"
-	"syscall"
 	"time"
 
 	"github.com/cortexproject/cortex/pkg/util"
@@ -19,10 +17,8 @@ import (
 	"github.com/weaveworks/common/server"
 )
 
-var stopC = make(chan os.Signal)
 var apiURL = flag.String("url", "", "send log via loki api using the provided url (e.g http://localhost:3100/api/prom/push)")
 var logPerSec = flag.Int64("logps", 500, "The total amount of log per second to generate.(default 500)")
-var remoteType = flag.String("remote-type", "loki", "Type of the remote destination: loki, elasticsearch. (default loki)")
 
 func init() {
 	lvl := logging.Level{}
@@ -31,8 +27,6 @@ func init() {
 	}
 	util.InitLogger(&server.Config{LogLevel: lvl})
 	flag.Parse()
-
-	signal.Notify(stopC, os.Interrupt, syscall.SIGTERM)
 }
 
 func main() {
@@ -41,37 +35,23 @@ func main() {
 		panic(err)
 	}
 	if apiURL != nil && *apiURL != "" {
-		switch *remoteType {
-		case "loki":
-			logViaAPI(*apiURL, host)
-		case "elasticsearch":
-			fmt.Println("Sending logging to es")
-			logViaEsCli(*apiURL, host)
-		default:
-			fmt.Printf("Unsupported remote type: %s\n", *remoteType)
-		}
+		logViaAPI(*apiURL, host)
 		return
 	}
-
-	ticker := time.NewTicker(time.Second / time.Duration(*logPerSec))
 	for {
-		select {
-		case <-stopC:
-			ticker.Stop()
-			return
-		case <-ticker.C:
-			var out io.Writer
-			var stream string
-			switch rand.Intn(2) {
-			case 1:
-				out = os.Stderr
-				stream = "stderr"
-			default:
-				out = os.Stdout
-				stream = "stdout"
-			}
-			fmt.Fprintf(out, "ts=%s stream=%s host=%s lvl=%s msg=%s \n", time.Now().Format(time.RFC3339Nano), stream, host, randLevel(), randomLog())
+		var out io.Writer
+		var stream string
+		switch rand.Intn(2) {
+		case 1:
+			out = os.Stderr
+			stream = "stderr"
+		default:
+			out = os.Stdout
+			stream = "stdout"
+
 		}
+		fmt.Fprintf(out, "ts=%s stream=%s host=%s lvl=%s msg=%s \n", time.Now().Format(time.RFC3339Nano), stream, host, randLevel(), randomLog())
+		time.Sleep(time.Second / time.Duration(*logPerSec))
 	}
 }
 
@@ -99,19 +79,14 @@ func logViaAPI(apiURL string, hostname string) {
 	ticker := time.NewTicker(time.Second / time.Duration(*logPerSec))
 	defer ticker.Stop()
 	for {
-		select {
-		case <-stopC:
-			ticker.Stop()
-			return
-		case <-ticker.C:
-			_ = c.Handle(
-				model.LabelSet{
-					"hostname":  model.LabelValue(hostname),
-					"service":   randService(),
-					"level":     randLevel(),
-					"component": randComponent(),
-				}, time.Now(), randomLog())
-		}
+		<-ticker.C
+		_ = c.Handle(
+			model.LabelSet{
+				"hostname":  model.LabelValue(hostname),
+				"service":   randService(),
+				"level":     randLevel(),
+				"component": randComponent(),
+			}, time.Now(), randomLog())
 	}
 }
 
